@@ -1,0 +1,46 @@
+# Go
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.a
+*.o
+*.obj
+*.pdb
+
+# Go build cache
+/.cache/
+
+# Coverage
+*.cover
+coverage.out
+
+# Go workspace
+/go.work
+/go.work.sum
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+
+# Session/output (project-specific)
+.directr/
