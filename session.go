@@ -37,7 +37,11 @@ type SnapshotRef struct {
 }
 
 func DefaultPath() string {
-	return filepath.Join(".directr-cli", "session.json")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".directr-cli", "session.json")
+	}
+	return filepath.Join(home, ".directr-cli", "session.json")
 }
 
 func Load(path string) (Data, error) {

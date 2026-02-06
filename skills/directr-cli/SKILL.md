@@ -10,7 +10,7 @@ description: Automates Windows UI Automation for desktop app testing, form filli
 ```bash
 directr-cli list
 directr-cli open --class "Chrome_WidgetWin_1" --title "My App"
-directr-cli snapshot
+# Each interaction (click, type, etc.) automatically saves a new snapshot to .directr-cli/ (current directory)
 directr-cli click e15
 directr-cli type "search query"
 directr-cli press Enter
@@ -19,9 +19,17 @@ directr-cli press Enter
 ## Core workflow
 
 1. Select a window: `directr-cli open --class ... --title ...`
-2. Snapshot: `directr-cli snapshot`
-3. Interact using refs from the snapshot
-4. Re-snapshot after significant UI changes
+2. Interact using refs from the snapshot.
+3. **Automatic Snapshots**: Each successful action (click, fill, etc.) saves a new UI snapshot in the `.directr-cli/` directory (relative to current working directory).
+4. **Session**: Window and snapshot mapping are stored in `~/.directr-cli/session.json` by default (global across different working directories).
+
+## Global Flags
+
+Available for most interaction commands:
+
+- `--snapshot`: Snapshot mode: `auto` (default), `off` (disable auto-save), `stdout` (print to terminal).
+- `--snapshot-dir`: Directory to save snapshots (default: `.directr-cli` in current directory).
+- `--session`: Path to the session JSON (default: `~/.directr-cli/session.json`).
 
 ## Commands
 
@@ -83,19 +91,21 @@ directr-cli session-delete
 
 ```bash
 directr-cli open --class "Chrome_WidgetWin_1" --title "Login"
-directr-cli snapshot
+# Initial snapshot is saved to .directr-cli/
 
 directr-cli fill e1 "user@example.com"
+# Automatic snapshot saved after fill
 directr-cli fill e2 "password123"
+# Automatic snapshot saved after fill
 directr-cli click e3
-directr-cli snapshot
+# Automatic snapshot saved after click
 ```
 
 ## Example: Debugging with properties
 
 ```bash
 directr-cli open --class "Chrome_WidgetWin_1" --title "Login"
-directr-cli snapshot
+# Use the auto-saved snapshot from .directr-cli/
 directr-cli property e5
 directr-cli value e5
 ```
