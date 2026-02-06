@@ -9,50 +9,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	directr "github.com/Tryanks/directr"
 )
 
 func runOpen(args []string) error {
-	fs := newFlagSet("open")
-	className := fs.String("class", "", "window class name")
-	title := fs.String("title", "", "window title")
-	hwndStr := fs.String("hwnd", "", "window handle in hex or decimal")
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("open", flagWindow|flagSession|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	if *className == "" && *title == "" && *hwndStr == "" {
+	if *cf.window.class == "" && *cf.window.title == "" && *cf.window.hwnd == "" {
 		return errors.New("open requires --class, --title, or --hwnd")
 	}
 
-	hwnd, err := directr.ResolveWindowHandle(*hwndStr, *className, *title)
+	hwnd, err := directr.ResolveWindowHandle(*cf.window.hwnd, *cf.window.class, *cf.window.title)
 	if err != nil {
 		return err
 	}
 
 	data := directr.Data{
-		Window:  directr.WindowRef{Hwnd: directr.FormatHwnd(hwnd), Class: *className, Title: *title},
+		Window:  directr.WindowRef{Hwnd: directr.FormatHwnd(hwnd), Class: *cf.window.class, Title: *cf.window.title},
 		Updated: time.Now().Format(time.RFC3339),
 	}
-	return directr.Save(*sessionPath, data)
+	if err := directr.Save(*cf.sessionPath, data); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, data)
 }
 
 func runClose(args []string) error {
-	fs := newFlagSet("close")
-	className := fs.String("class", "", "window class name")
-	title := fs.String("title", "", "window title")
-	hwndStr := fs.String("hwnd", "", "window handle in hex or decimal")
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("close", flagWindow|flagSession)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*hwndStr, *className, *title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
@@ -63,14 +58,14 @@ func runClose(args []string) error {
 
 	if sessionData.Window.Hwnd != "" {
 		directr.Touch(&sessionData)
-		return directr.Save(*sessionPath, sessionData)
+		return directr.Save(*cf.sessionPath, sessionData)
 	}
 	return nil
 }
 
 func runList(args []string) error {
-	fs := newFlagSet("list")
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("list", flagJSON|flagOut)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
@@ -78,74 +73,69 @@ func runList(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, win := range windows {
-		fmt.Printf("%s class=\"%s\" title=\"%s\"\n", win.Hwnd, win.Class, win.Title)
+
+	var output string
+	if *cf.json {
+		data, err := json.MarshalIndent(windows, "", "  ")
+		if err != nil {
+			return err
+		}
+		output = string(data)
+	} else {
+		var buf strings.Builder
+		for _, win := range windows {
+			buf.WriteString(fmt.Sprintf("%s class=\"%s\" title=\"%s\"\n", win.Hwnd, win.Class, win.Title))
+		}
+		output = buf.String()
 	}
+
+	if *cf.out != "" {
+		return writeOutput(*cf.out, output)
+	}
+	fmt.Print(output)
 	return nil
 }
 
 func runSnapshot(args []string) error {
-	fs := newFlagSet("snapshot")
-	className := fs.String("class", "", "window class name")
-	title := fs.String("title", "", "window title")
-	hwndStr := fs.String("hwnd", "", "window handle in hex or decimal")
-	outPath := fs.String("out", "", "output file path")
-	maxDepth := fs.Int("max-depth", directr.DefaultMaxDepth, "max traversal depth")
-	maxNodes := fs.Int("max-nodes", directr.DefaultMaxNodes, "max nodes")
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("snapshot", flagWindow|flagSession|flagOut|flagDepth)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*hwndStr, *className, *title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	var output string
-	var state directr.SnapshotState
-	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
-		output, state = directr.SnapshotTree(rootElement, *maxDepth, *maxNodes)
-		return nil
-	}); err != nil {
+	output, state, err := captureSnapshot(hwnd, *cf.maxDepth, *cf.maxNodes)
+	if err != nil {
 		return err
 	}
 
-	if err := writeOutput(*outPath, output); err != nil {
+	if err := writeOutput(*cf.out, output); err != nil {
 		return err
 	}
 
-	sessionData.Window.Hwnd = directr.FormatHwnd(hwnd)
-	sessionData.Window.Class = *className
-	sessionData.Window.Title = *title
-	sessionData.Snapshot = state
-	sessionData.Snapshot.Captured = time.Now().Format(time.RFC3339)
-	directr.Touch(&sessionData)
-	return directr.Save(*sessionPath, sessionData)
+	return updateSessionWithSnapshot(cf, hwnd, state, sessionData)
 }
 
 func runClick(args []string, double bool) error {
-	fs := newFlagSet("click")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("click", flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("click requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
@@ -161,30 +151,29 @@ func runClick(args []string, double bool) error {
 			return directr.MouseDoubleClick(point.X, point.Y)
 		}
 		return directr.MouseClick(point.X, point.Y)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runHover(args []string) error {
-	fs := newFlagSet("hover")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("hover", flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("hover requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
@@ -194,21 +183,20 @@ func runHover(args []string) error {
 			return err
 		}
 		return directr.SetCursor(point.X, point.Y)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runFill(args []string) error {
-	fs := newFlagSet("fill")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-	value := fs.String("value", "", "value to set")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("fill", flagWindow|flagSession|flagSelector|flagSnapshot)
+	value := cf.fs.String("value", "", "value to set")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := parseSelectorAndValue(fs.Args(), selectorFlags, value)
+	selector, err := parseSelectorAndValue(cf.fs.Args(), cf.selector, value)
 	if err != nil {
 		return err
 	}
@@ -216,12 +204,12 @@ func runFill(args []string) error {
 		return errors.New("fill requires a value")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
@@ -238,39 +226,38 @@ func runFill(args []string) error {
 			return err
 		}
 		return directr.TypeText(*value)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runType(args []string) error {
-	fs := newFlagSet("type")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-	value := fs.String("text", "", "text to type")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("type", flagWindow|flagSession|flagSelector|flagSnapshot)
+	value := cf.fs.String("text", "", "text to type")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	args = fs.Args()
-	selector := optionalSelectorFromFlags(selectorFlags, args)
-	if *value == "" && len(args) > 0 {
-		if selector != nil && refPattern.MatchString(args[0]) && len(args) > 1 {
-			*value = args[1]
-		} else if !refPattern.MatchString(args[0]) {
-			*value = args[0]
+	remaining := cf.fs.Args()
+	selector := optionalSelectorFromFlags(cf.selector, remaining)
+	if *value == "" && len(remaining) > 0 {
+		if selector != nil && refPattern.MatchString(remaining[0]) && len(remaining) > 1 {
+			*value = remaining[1]
+		} else if !refPattern.MatchString(remaining[0]) {
+			*value = remaining[0]
 		}
 	}
 	if *value == "" {
 		return errors.New("type requires text")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		if selector != nil {
 			element, err := directr.ResolveElement(rootElement, selector, sessionData)
 			if err != nil {
@@ -288,39 +275,38 @@ func runType(args []string) error {
 			}
 		}
 		return directr.TypeText(*value)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runPress(args []string) error {
-	fs := newFlagSet("press")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-	key := fs.String("key", "", "key to press")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("press", flagWindow|flagSession|flagSelector|flagSnapshot)
+	key := cf.fs.String("key", "", "key to press")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	args = fs.Args()
-	selector := optionalSelectorFromFlags(selectorFlags, args)
-	if *key == "" && len(args) > 0 {
-		if selector != nil && refPattern.MatchString(args[0]) && len(args) > 1 {
-			*key = args[1]
-		} else if !refPattern.MatchString(args[0]) {
-			*key = args[0]
+	remaining := cf.fs.Args()
+	selector := optionalSelectorFromFlags(cf.selector, remaining)
+	if *key == "" && len(remaining) > 0 {
+		if selector != nil && refPattern.MatchString(remaining[0]) && len(remaining) > 1 {
+			*key = remaining[1]
+		} else if !refPattern.MatchString(remaining[0]) {
+			*key = remaining[0]
 		}
 	}
 	if *key == "" {
 		return errors.New("press requires a key")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		if selector != nil {
 			element, err := directr.ResolveElement(rootElement, selector, sessionData)
 			if err != nil {
@@ -331,21 +317,21 @@ func runPress(args []string) error {
 			}
 		}
 		return directr.SendKeyChord(*key)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runDrag(args []string) error {
-	fs := newFlagSet("drag")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	fromRef := fs.String("from-ref", "", "source ref")
-	toRef := fs.String("to-ref", "", "target ref")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("drag", flagWindow|flagSession|flagSnapshot)
+	fromRef := cf.fs.String("from-ref", "", "source ref")
+	toRef := cf.fs.String("to-ref", "", "target ref")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	remaining := fs.Args()
+	remaining := cf.fs.Args()
 	if *fromRef == "" && len(remaining) > 0 && refPattern.MatchString(remaining[0]) {
 		*fromRef = remaining[0]
 	}
@@ -356,12 +342,12 @@ func runDrag(args []string) error {
 		return errors.New("drag requires --from-ref and --to-ref (or positional refs)")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		fromSel := &directr.ElementSelector{Ref: *fromRef}
 		toSel := &directr.ElementSelector{Ref: *toRef}
 		fromEl, err := directr.ResolveElement(rootElement, fromSel, sessionData)
@@ -381,21 +367,20 @@ func runDrag(args []string) error {
 			return err
 		}
 		return directr.MouseDrag(fromPoint.X, fromPoint.Y, toPoint.X, toPoint.Y)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runSelect(args []string) error {
-	fs := newFlagSet("select")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-	option := fs.String("option", "", "option text to select")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("select", flagWindow|flagSession|flagSelector|flagSnapshot)
+	option := cf.fs.String("option", "", "option text to select")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := parseSelectorAndValue(fs.Args(), selectorFlags, option)
+	selector, err := parseSelectorAndValue(cf.fs.Args(), cf.selector, option)
 	if err != nil {
 		return err
 	}
@@ -403,12 +388,12 @@ func runSelect(args []string) error {
 		return errors.New("select requires an option value")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		target, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
@@ -422,30 +407,33 @@ func runSelect(args []string) error {
 			return fmt.Errorf("option %q not found", *option)
 		}
 		return directr.SelectItem(optionEl)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runCheck(args []string, wantOn bool) error {
-	fs := newFlagSet("check")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	name := "check"
+	if !wantOn {
+		name = "uncheck"
+	}
+	cf := bindCommonFlags(name, flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
-		return errors.New("check/uncheck requires a selector")
+		return fmt.Errorf("%s requires a selector", name)
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
@@ -455,21 +443,20 @@ func runCheck(args []string, wantOn bool) error {
 			return nil
 		}
 		return directr.Invoke(element)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runUpload(args []string) error {
-	fs := newFlagSet("upload")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-	path := fs.String("file", "", "file path to upload")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("upload", flagWindow|flagSession|flagSelector|flagSnapshot)
+	path := cf.fs.String("file", "", "file path to upload")
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := parseSelectorAndValue(fs.Args(), selectorFlags, path)
+	selector, err := parseSelectorAndValue(cf.fs.Args(), cf.selector, path)
 	if err != nil {
 		return err
 	}
@@ -477,65 +464,63 @@ func runUpload(args []string) error {
 		return errors.New("upload requires a file path")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
 		}
 		return directr.SetValue(element, *path)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runFocus(args []string) error {
-	fs := newFlagSet("focus")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("focus", flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("focus requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
 		}
 		return directr.Focus(element)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runProperty(args []string) error {
-	fs := newFlagSet("property")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("property", flagWindow|flagSession|flagSelector|flagJSON|flagOut)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("property requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
@@ -549,31 +534,48 @@ func runProperty(args []string) error {
 		if err != nil {
 			return err
 		}
-		encoded, err := json.MarshalIndent(props, "", "  ")
-		if err != nil {
-			return err
+
+		var output string
+		if *cf.json {
+			encoded, err := json.MarshalIndent(props, "", "  ")
+			if err != nil {
+				return err
+			}
+			output = string(encoded)
+		} else {
+			var buf strings.Builder
+			// Sort keys for deterministic output
+			keys := make([]string, 0, len(props))
+			for k := range props {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			for _, k := range keys {
+				buf.WriteString(fmt.Sprintf("%s: %v\n", k, props[k]))
+			}
+			output = buf.String()
 		}
-		fmt.Println(string(encoded))
+
+		if *cf.out != "" {
+			return writeOutput(*cf.out, output)
+		}
+		fmt.Print(output)
 		return nil
 	})
 }
 
 func runValue(args []string) error {
-	fs := newFlagSet("value")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("value", flagWindow|flagSession|flagSelector|flagJSON|flagOut)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("value requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
@@ -587,119 +589,124 @@ func runValue(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println(val)
+
+		var output string
+		if *cf.json {
+			encoded, err := json.MarshalIndent(map[string]string{"value": val}, "", "  ")
+			if err != nil {
+				return err
+			}
+			output = string(encoded)
+		} else {
+			output = val + "\n"
+		}
+
+		if *cf.out != "" {
+			return writeOutput(*cf.out, output)
+		}
+		fmt.Print(output)
 		return nil
 	})
 }
 
 func runTree(args []string) error {
-	fs := newFlagSet("tree")
-	className := fs.String("class", "", "window class name")
-	title := fs.String("title", "", "window title")
-	hwndStr := fs.String("hwnd", "", "window handle in hex or decimal")
-	outPath := fs.String("out", "", "output file path")
-	maxDepth := fs.Int("max-depth", directr.DefaultMaxDepth, "max traversal depth")
-	maxNodes := fs.Int("max-nodes", directr.DefaultMaxNodes, "max nodes")
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("tree", flagWindow|flagSession|flagOut|flagDepth)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*hwndStr, *className, *title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
 	var output string
 	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
-		output = directr.VerboseTree(rootElement, *maxDepth, *maxNodes)
+		output = directr.VerboseTree(rootElement, *cf.maxDepth, *cf.maxNodes)
 		return nil
 	}); err != nil {
 		return err
 	}
 
-	if err := writeOutput(*outPath, output); err != nil {
+	if err := writeOutput(*cf.out, output); err != nil {
 		return err
 	}
 
 	sessionData.Window.Hwnd = directr.FormatHwnd(hwnd)
-	sessionData.Window.Class = *className
-	sessionData.Window.Title = *title
+	sessionData.Window.Class = *cf.window.class
+	sessionData.Window.Title = *cf.window.title
 	directr.Touch(&sessionData)
-	return directr.Save(*sessionPath, sessionData)
+	return directr.Save(*cf.sessionPath, sessionData)
 }
 
 func runInvoke(args []string) error {
-	fs := newFlagSet("invoke")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("invoke", flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("invoke requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
 		}
 		return directr.Invoke(element)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runToggle(args []string) error {
-	fs := newFlagSet("toggle")
-	windowFlags := bindWindowFlags(fs)
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	selectorFlags := bindSelectorFlags(fs)
-
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("toggle", flagWindow|flagSession|flagSelector|flagSnapshot)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
 
-	selector, err := selectorFromFlags(selectorFlags, fs.Args())
+	selector, err := selectorFromFlags(cf.selector, cf.fs.Args())
 	if err != nil {
 		return errors.New("toggle requires a selector")
 	}
 
-	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*windowFlags.hwnd, *windowFlags.class, *windowFlags.title, *sessionPath)
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
 	if err != nil {
 		return err
 	}
 
-	return directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
 		element, err := directr.ResolveElement(rootElement, selector, sessionData)
 		if err != nil {
 			return err
 		}
 		return directr.Toggle(element)
-	})
+	}); err != nil {
+		return err
+	}
+	return autoSnapshot(cf, hwnd, sessionData)
 }
 
 func runSessionDelete(args []string) error {
-	fs := newFlagSet("session-delete")
-	sessionPath := fs.String("session", directr.DefaultPath(), "session file path")
-	if err := fs.Parse(args); err != nil {
+	cf := bindCommonFlags("session-delete", flagSession)
+	if err := cf.parse(args); err != nil {
 		return err
 	}
-	if *sessionPath == "" {
+	if *cf.sessionPath == "" {
 		return errors.New("session-delete requires --session path")
 	}
-	if err := os.Remove(*sessionPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(*cf.sessionPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	fmt.Printf("Deleted session file: %s\n", *cf.sessionPath)
 	return nil
 }
 
@@ -712,4 +719,73 @@ func writeOutput(path string, data string) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 	return os.WriteFile(path, []byte(data), 0o644)
+}
+
+func captureSnapshot(hwnd uintptr, maxDepth, maxNodes int) (string, directr.SnapshotState, error) {
+	var output string
+	var state directr.SnapshotState
+	err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+		output, state = directr.SnapshotTree(rootElement, maxDepth, maxNodes)
+		return nil
+	})
+	return output, state, err
+}
+
+func updateSessionWithSnapshot(cf *commonFlags, hwnd uintptr, state directr.SnapshotState, sessionData directr.Data) error {
+	sessionData.Window.Hwnd = directr.FormatHwnd(hwnd)
+	if cf.window != nil {
+		if *cf.window.class != "" {
+			sessionData.Window.Class = *cf.window.class
+		}
+		if *cf.window.title != "" {
+			sessionData.Window.Title = *cf.window.title
+		}
+	}
+	sessionData.Snapshot = state
+	sessionData.Snapshot.Captured = time.Now().Format(time.RFC3339)
+	directr.Touch(&sessionData)
+	return directr.Save(*cf.sessionPath, sessionData)
+}
+
+func autoSnapshot(cf *commonFlags, hwnd uintptr, sessionData directr.Data) error {
+	if cf.snapshotMode == nil || *cf.snapshotMode == "off" {
+		return nil
+	}
+
+	maxDepth := directr.DefaultMaxDepth
+	if cf.maxDepth != nil && *cf.maxDepth > 0 {
+		maxDepth = *cf.maxDepth
+	}
+	maxNodes := directr.DefaultMaxNodes
+	if cf.maxNodes != nil && *cf.maxNodes > 0 {
+		maxNodes = *cf.maxNodes
+	}
+
+	output, state, err := captureSnapshot(hwnd, maxDepth, maxNodes)
+	if err != nil {
+		return err
+	}
+
+	switch *cf.snapshotMode {
+	case "stdout":
+		fmt.Print(output)
+	case "auto":
+		dir := *cf.snapshotDir
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		// Format: page-2006-01-02T15-04-05-000Z.yml
+		// Use UTC and replace : with - for Windows compatibility
+		now := time.Now().UTC()
+		timestamp := now.Format("2006-01-02T15-04-05.000Z")
+		timestamp = strings.ReplaceAll(timestamp, ":", "-")
+		timestamp = strings.ReplaceAll(timestamp, ".", "-")
+		filename := filepath.Join(dir, fmt.Sprintf("page-%s.yml", timestamp))
+		if err := os.WriteFile(filename, []byte(output), 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Snapshot saved to %s\n", filename)
+	}
+
+	return updateSessionWithSnapshot(cf, hwnd, state, sessionData)
 }
