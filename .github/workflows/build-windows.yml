@@ -1,0 +1,43 @@
+name: Build Windows Binaries
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build (windows/${{ matrix.goarch }})
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            artifact: directr-cli-windows-amd64
+            binary: directr-cli-windows-amd64.exe
+          - goarch: arm64
+            artifact: directr-cli-windows-arm64
+            binary: directr-cli-windows-arm64.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Setup Go
+        uses: actions/setup-go@main
+        with:
+          go-version: "stable"
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o "dist/${{ matrix.binary }}" ./cmd/directr-cli
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
