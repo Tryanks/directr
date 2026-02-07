@@ -97,7 +97,7 @@ func runList(args []string) error {
 }
 
 func runSnapshot(args []string) error {
-	cf := bindCommonFlags("snapshot", flagWindow|flagSession|flagOut|flagDepth)
+	cf := bindCommonFlags("snapshot", flagWindow|flagSession|flagOut|flagDepth|flagFormat)
 	if err := cf.parse(args); err != nil {
 		return err
 	}
@@ -107,7 +107,11 @@ func runSnapshot(args []string) error {
 		return err
 	}
 
-	output, state, err := captureSnapshot(hwnd, *cf.maxDepth, *cf.maxNodes)
+	format := "full"
+	if cf.format != nil {
+		format = *cf.format
+	}
+	output, state, err := captureSnapshot(hwnd, *cf.maxDepth, *cf.maxNodes, format)
 	if err != nil {
 		return err
 	}
@@ -695,6 +699,72 @@ func runToggle(args []string) error {
 	return autoSnapshot(cf, hwnd, sessionData)
 }
 
+func runBatch(args []string) error {
+	cf := bindCommonFlags("batch", flagWindow|flagSession|flagSnapshot|flagFormat)
+	actionsJSON := cf.fs.String("actions", "", "JSON array of actions")
+	stdin := cf.fs.Bool("stdin", false, "read actions JSON from stdin")
+	if err := cf.parse(args); err != nil {
+		return err
+	}
+
+	var rawJSON string
+	if *stdin {
+		data, err := os.ReadFile("/dev/stdin")
+		if err != nil {
+			// On Windows, read from os.Stdin directly
+			buf := make([]byte, 0, 64*1024)
+			tmp := make([]byte, 4096)
+			for {
+				n, readErr := os.Stdin.Read(tmp)
+				if n > 0 {
+					buf = append(buf, tmp[:n]...)
+				}
+				if readErr != nil {
+					break
+				}
+			}
+			rawJSON = string(buf)
+		} else {
+			rawJSON = string(data)
+		}
+	} else if *actionsJSON != "" {
+		rawJSON = *actionsJSON
+	} else if remaining := cf.fs.Args(); len(remaining) > 0 {
+		rawJSON = remaining[0]
+	} else {
+		return errors.New("batch requires --actions JSON or --stdin")
+	}
+
+	var actions []directr.BatchAction
+	if err := json.Unmarshal([]byte(rawJSON), &actions); err != nil {
+		return fmt.Errorf("parse actions JSON: %w", err)
+	}
+	if len(actions) == 0 {
+		return errors.New("batch requires at least one action")
+	}
+
+	hwnd, sessionData, err := directr.ResolveWindowFromFlagsOrSession(*cf.window.hwnd, *cf.window.class, *cf.window.title, *cf.sessionPath)
+	if err != nil {
+		return err
+	}
+
+	var results []directr.BatchResult
+	if err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
+		results = directr.ExecuteBatch(rootElement, actions, sessionData)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	output, err := json.Marshal(map[string]any{"results": results})
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(output))
+
+	return autoSnapshot(cf, hwnd, sessionData)
+}
+
 func runSessionDelete(args []string) error {
 	cf := bindCommonFlags("session-delete", flagSession)
 	if err := cf.parse(args); err != nil {
@@ -721,11 +791,15 @@ func writeOutput(path string, data string) error {
 	return os.WriteFile(path, []byte(data), 0o644)
 }
 
-func captureSnapshot(hwnd uintptr, maxDepth, maxNodes int) (string, directr.SnapshotState, error) {
+func captureSnapshot(hwnd uintptr, maxDepth, maxNodes int, format string) (string, directr.SnapshotState, error) {
 	var output string
 	var state directr.SnapshotState
 	err := directr.WithUIAutomation(hwnd, func(rootElement *directr.Element) error {
-		output, state = directr.SnapshotTree(rootElement, maxDepth, maxNodes)
+		if format == "compact" {
+			output, state = directr.CompactSnapshotTree(rootElement, maxDepth, maxNodes)
+		} else {
+			output, state = directr.SnapshotTree(rootElement, maxDepth, maxNodes)
+		}
 		return nil
 	})
 	return output, state, err
@@ -760,8 +834,12 @@ func autoSnapshot(cf *commonFlags, hwnd uintptr, sessionData directr.Data) error
 	if cf.maxNodes != nil && *cf.maxNodes > 0 {
 		maxNodes = *cf.maxNodes
 	}
+	format := "full"
+	if cf.format != nil {
+		format = *cf.format
+	}
 
-	output, state, err := captureSnapshot(hwnd, maxDepth, maxNodes)
+	output, state, err := captureSnapshot(hwnd, maxDepth, maxNodes, format)
 	if err != nil {
 		return err
 	}

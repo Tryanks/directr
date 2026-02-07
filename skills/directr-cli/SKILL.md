@@ -30,6 +30,7 @@ Available for most interaction commands:
 - `--snapshot`: Snapshot mode: `auto` (default), `off` (disable auto-save), `stdout` (print to terminal).
 - `--snapshot-dir`: Directory to save snapshots (default: `.directr-cli` in current directory).
 - `--session`: Path to the session JSON (default: `~/.directr-cli/session.json`).
+- `--format`: Snapshot format: `full` (default, tree YAML), `compact` (flat, actionable elements only — much smaller output).
 
 ## Commands
 
@@ -87,6 +88,35 @@ directr-cli --session=mysession click e6
 directr-cli session-delete
 ```
 
+### Batch (execute multiple actions in one call)
+
+```bash
+# Batch via --actions flag (JSON array)
+directr-cli batch --actions '[{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"plusButton"},{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"equalButton"}]'
+
+# Batch via stdin
+echo '[{"action":"click","ref":"e41"},{"action":"click","ref":"e37"}]' | directr-cli batch --stdin
+```
+
+Batch action fields:
+- `action`: click, dblclick, fill, type, press, hover, invoke, toggle, check, uncheck, select, drag
+- `ref` / `automationId` / `name`: element selector (pick one)
+- `value`: for fill/type/press/select
+- `toRef` / `toAutomationId`: drag target
+
+Output: JSON `{"results":[{"index":0,"action":"click","ok":true}, ...]}`.
+All actions share a single UIA session — much faster than separate commands.
+
+### Compact snapshot
+
+```bash
+# Compact output shows only actionable elements (buttons, inputs, text, etc.)
+directr-cli snapshot --format compact
+
+# Full tree (default)
+directr-cli snapshot --format full
+```
+
 ## Example: Form submission
 
 ```bash
@@ -101,6 +131,14 @@ directr-cli click e3
 # Automatic snapshot saved after click
 ```
 
+## Example: Calculator 1+1 (batch)
+
+```bash
+directr-cli open --title "计算器" --snapshot off
+directr-cli batch --snapshot off --actions '[{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"plusButton"},{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"equalButton"}]'
+directr-cli property --automation-id CalculatorResults
+```
+
 ## Example: Debugging with properties
 
 ```bash
@@ -112,7 +150,7 @@ directr-cli value e5
 
 ## Snapshot/selector rules
 
-- Snapshot output is Playwright-like YAML.
+- Snapshot output is Playwright-like YAML (`--format full`) or flat actionable-only list (`--format compact`).
 - Snapshot refs map to tree paths stored in session JSON.
 - Selector resolution order:
   - `ref` from snapshot session

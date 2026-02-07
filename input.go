@@ -74,6 +74,10 @@ type keybdInput struct {
 type winInput struct {
 	Type uint32
 	Ki   keybdInput
+	// Padding to match Windows INPUT struct size (40 bytes on 64-bit).
+	// The C union in INPUT is sized to MOUSEINPUT (32 bytes), but keybdInput
+	// is only 24 bytes; this extra 8-byte pad accounts for the difference.
+	_pad [8]byte
 }
 
 func ElementCenter(element *Element) (*Point, error) {

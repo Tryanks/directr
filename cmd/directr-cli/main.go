@@ -26,6 +26,7 @@ var commands = map[string]command{
 	"close":          {run: runClose, desc: "Close the selected window (WM_CLOSE)"},
 	"list":           {run: runList, desc: "List top-level visible windows"},
 	"snapshot":       {run: runSnapshot, desc: "Capture UI Automation tree and emit Playwright-like YAML"},
+	"batch":          {run: runBatch, desc: "Execute multiple actions in a single UIA session (JSON input)"},
 	"click":          {run: func(args []string) error { return runClick(args, false) }, desc: "Invoke or click a target element"},
 	"dblclick":       {run: func(args []string) error { return runClick(args, true) }, desc: "Double-click a target element"},
 	"hover":          {run: runHover, desc: "Move mouse to a target element"},
@@ -111,6 +112,7 @@ func printUsage() {
 	fmt.Println("  --json            Output in JSON format")
 	fmt.Println("  --snapshot        Snapshot mode: auto (default), off, stdout")
 	fmt.Println("  --snapshot-dir    Directory to save snapshots (default: .directr-cli in CWD)")
+	fmt.Println("  --format          Snapshot format: full (default), compact")
 	fmt.Println("  --out             Output to file instead of stdout")
 	fmt.Println()
 	fmt.Println("Common selector flags:")
@@ -146,6 +148,7 @@ type commonFlags struct {
 	maxNodes     *int
 	snapshotMode *string
 	snapshotDir  *string
+	format       *string
 }
 
 func (f *commonFlags) parse(args []string) error {
@@ -195,6 +198,9 @@ func bindCommonFlags(name string, flags int) *commonFlags {
 		cf.snapshotMode = fs.String("snapshot", "auto", "snapshot mode: auto, off, stdout")
 		cf.snapshotDir = fs.String("snapshot-dir", ".directr-cli", "directory to save snapshots")
 	}
+	if flags&flagFormat != 0 {
+		cf.format = fs.String("format", "full", "snapshot format: full (default), compact")
+	}
 
 	return cf
 }
@@ -207,6 +213,7 @@ const (
 	flagOut
 	flagDepth
 	flagSnapshot
+	flagFormat
 )
 
 func selectorFromFlags(flags *selectorFlagRefs, args []string) (*directr.ElementSelector, error) {
