@@ -1,8 +1,8 @@
 module github.com/Tryanks/directr/cmd/directr-mcp
 
-go 1.25
+go 1.25.0
 
-replace github.com/Tryanks/directr => ../../
+replace github.com/Tryanks/directr => ../..
 
 require (
 	github.com/Tryanks/directr v0.0.0-00010101000000-000000000000
