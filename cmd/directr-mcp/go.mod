@@ -1,6 +1,6 @@
 module github.com/Tryanks/directr/cmd/directr-mcp
 
-go 1.25.0
+go 1.25
 
 replace github.com/Tryanks/directr => ../../
 
