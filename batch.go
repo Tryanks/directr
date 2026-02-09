@@ -10,13 +10,13 @@ import (
 
 // BatchAction describes a single UI action to execute as part of a batch.
 type BatchAction struct {
-	Action       string `json:"action"`                 // click, dblclick, fill, type, press, hover, invoke, toggle, check, uncheck, select, drag
+	Action       string `json:"action"`                 // click, dblclick, fill, type, press, hover, invoke, toggle, check, uncheck, select, drag, sleep
 	Ref          string `json:"ref,omitempty"`           // snapshot ref (e1, e2, ...)
 	AutomationId string `json:"automationId,omitempty"` // UIA AutomationId
 	Name         string `json:"name,omitempty"`          // element name
 	ClassName    string `json:"className,omitempty"`     // UIA ClassName
 	ControlType  string `json:"controlType,omitempty"`   // control type
-	Value        string `json:"value,omitempty"`         // value for fill/type/press/select
+	Value        string `json:"value,omitempty"`         // value for fill/type/press/select/sleep (milliseconds for sleep)
 	ToRef        string `json:"toRef,omitempty"`         // drag target ref
 	ToAutoId     string `json:"toAutomationId,omitempty"` // drag target automationId
 	ToName       string `json:"toName,omitempty"`        // drag target name
@@ -83,6 +83,8 @@ func executeSingleAction(root *Element, act BatchAction, sessionData Data) error
 		return executeBatchSelect(root, act, sessionData)
 	case "drag":
 		return executeBatchDrag(root, act, sessionData)
+	case "sleep":
+		return executeBatchSleep(act)
 	default:
 		return fmt.Errorf("unknown action %q", act.Action)
 	}
@@ -260,4 +262,19 @@ func executeBatchDrag(root *Element, act BatchAction, sessionData Data) error {
 	// Small delay between actions for UI responsiveness
 	time.Sleep(50 * time.Millisecond)
 	return MouseDrag(fromPoint.X, fromPoint.Y, toPoint.X, toPoint.Y)
+}
+
+func executeBatchSleep(act BatchAction) error {
+	if act.Value == "" {
+		return fmt.Errorf("sleep requires a duration value in milliseconds")
+	}
+	var durationMs int
+	if _, err := fmt.Sscanf(act.Value, "%d", &durationMs); err != nil {
+		return fmt.Errorf("sleep duration must be a number in milliseconds: %w", err)
+	}
+	if durationMs < 0 {
+		return fmt.Errorf("sleep duration must be non-negative")
+	}
+	time.Sleep(time.Duration(durationMs) * time.Millisecond)
+	return nil
 }
