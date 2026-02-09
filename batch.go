@@ -5,6 +5,7 @@ package directr
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -268,8 +269,8 @@ func executeBatchSleep(act BatchAction) error {
 	if act.Value == "" {
 		return fmt.Errorf("sleep requires a duration value in milliseconds")
 	}
-	var durationMs int
-	if _, err := fmt.Sscanf(act.Value, "%d", &durationMs); err != nil {
+	durationMs, err := strconv.Atoi(act.Value)
+	if err != nil {
 		return fmt.Errorf("sleep duration must be a number in milliseconds: %w", err)
 	}
 	if durationMs < 0 {
