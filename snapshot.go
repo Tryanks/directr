@@ -1,5 +1,4 @@
 //go:build windows
-// +build windows
 
 package directr
 
@@ -123,6 +122,89 @@ func writeVerboseTree(buf *bytes.Buffer, node *Element, depth int, maxDepth int,
 			return
 		}
 	}
+}
+
+// CompactSnapshotTree generates a compact snapshot that only includes actionable
+// elements in a flat format.  All elements still get a ref assigned (so the
+// returned SnapshotState is identical to SnapshotTree), but only elements whose
+// control type is in the actionable set are printed.
+func CompactSnapshotTree(root *Element, maxDepth, maxNodes int) (string, SnapshotState) {
+	state := SnapshotState{Refs: map[string]SnapshotRef{}, MaxDepth: maxDepth, MaxNodes: maxNodes}
+	gen := &refGen{}
+	remaining := maxNodes
+	state.RootTitle = root.Name()
+
+	// Collect actionable lines while walking the full tree.
+	var lines []string
+	collectCompactNodes(root, 0, gen, maxDepth, &remaining, nil, &state, &lines)
+
+	buf := &bytes.Buffer{}
+	buf.WriteString("window: " + quoteIfNeeded(strings.TrimSpace(root.Name())) + "\n---\n")
+	for _, l := range lines {
+		buf.WriteString(l + "\n")
+	}
+	return buf.String(), state
+}
+
+// collectCompactNodes walks the full tree, assigns refs to every node, stores
+// them in state, and appends a line to *lines only for actionable elements.
+func collectCompactNodes(node *Element, depth int, gen *refGen, maxDepth int, remaining *int, path []int, state *SnapshotState, lines *[]string) {
+	if node == nil || *remaining <= 0 || depth > maxDepth {
+		return
+	}
+	*remaining--
+
+	typeName := ControlTypeToName(node.ControlType())
+	if typeName == "" {
+		typeName = "generic"
+	}
+
+	name := strings.TrimSpace(node.Name())
+	ref := gen.next()
+
+	pathCopy := append([]int(nil), path...)
+	autoId := node.AutomationId()
+	state.Refs[ref] = SnapshotRef{
+		Path:         pathCopy,
+		Name:         node.Name(),
+		AutomationId: autoId,
+		ClassName:    node.ClassName(),
+		ControlType:  typeName,
+	}
+
+	if IsActionable(typeName) && name != "" {
+		line := "[" + ref + "] " + typeName + " " + quoteIfNeeded(name)
+		if autoId != "" {
+			line += "  id=" + autoId
+		}
+		// For text/paragraph elements, append current value
+		if typeName == "text" || typeName == "paragraph" {
+			line += ": " + name
+		}
+		*lines = append(*lines, line)
+	}
+
+	if depth < maxDepth {
+		for i, child := range node.Children() {
+			childPath := append(pathCopy, i)
+			collectCompactNodes(child, depth+1, gen, maxDepth, remaining, childPath, state, lines)
+			if *remaining <= 0 {
+				return
+			}
+		}
+	}
+}
+
+// IsActionable returns true for control types that are typically interactive.
+func IsActionable(typeName string) bool {
+	switch typeName {
+	case "button", "textbox", "text", "paragraph",
+		"checkbox", "radio", "combobox", "slider",
+		"listitem", "menuitem", "tab", "treeitem",
+		"link", "spinbutton", "splitbutton":
+		return true
+	}
+	return false
 }
 
 func quoteIfNeeded(value string) string {
