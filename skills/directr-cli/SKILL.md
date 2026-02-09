@@ -94,14 +94,17 @@ directr-cli session-delete
 # Batch via --actions flag (JSON array)
 directr-cli batch --actions '[{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"plusButton"},{"action":"click","automationId":"num1Button"},{"action":"click","automationId":"equalButton"}]'
 
+# Batch with sleep/delay between actions (value in milliseconds)
+directr-cli batch --actions '[{"action":"click","ref":"e41"},{"action":"sleep","value":"1000"},{"action":"click","ref":"e37"}]'
+
 # Batch via stdin
 echo '[{"action":"click","ref":"e41"},{"action":"click","ref":"e37"}]' | directr-cli batch --stdin
 ```
 
 Batch action fields:
-- `action`: click, dblclick, fill, type, press, hover, invoke, toggle, check, uncheck, select, drag
+- `action`: click, dblclick, fill, type, press, hover, invoke, toggle, check, uncheck, select, drag, sleep
 - `ref` / `automationId` / `name`: element selector (pick one)
-- `value`: for fill/type/press/select
+- `value`: for fill/type/press/select/sleep (milliseconds for sleep)
 - `toRef` / `toAutomationId`: drag target
 
 Output: JSON `{"results":[{"index":0,"action":"click","ok":true}, ...]}`.
