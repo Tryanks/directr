@@ -30,6 +30,7 @@ coverage.out
 .idea/
 *.iml
 .vscode/
+.cursor/
 
 # OS
 .DS_Store
