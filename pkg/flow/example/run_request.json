@@ -1,0 +1,9 @@
+{
+  "windowClass": "YourAppMainWindow",
+  "windowTitle": "Your Application",
+  "timeoutMs": 30000,
+  "pollIntervalMs": 250,
+  "snapshotDepth": 6,
+  "snapshotNodes": 400,
+  "scriptPath": "pkg/flow/example/login_flow.flow"
+}

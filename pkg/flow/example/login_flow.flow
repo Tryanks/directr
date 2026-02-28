@@ -1,0 +1,26 @@
+flow demo-login-flow {
+  initial: Login
+  target: Dashboard
+  maxSteps: 20
+
+  state Login {
+    scene {
+      required automationId=username
+      required automationId=password
+      required name=登录 controlType=button
+      forbidden name=退出登录
+      optional name=menu-home weight=2
+    }
+
+    transition to Dashboard {
+      click name=登录 controlType=button
+      wait 500
+    }
+  }
+
+  state Dashboard {
+    scene {
+      required name=工作台
+    }
+  }
+}
